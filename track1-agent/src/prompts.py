@@ -56,7 +56,7 @@ def build_sentiment_prompt(task_prompt: str) -> list:
 def build_summarisation_prompt(task_prompt: str) -> list:
     return [
         {"role": "system", "content": (
-            "Summarise the following text according to the exact length/format instruction given. "
+            "Summarise the following text according to the exact length/format instruction given. Output ONLY the summary, no reasoning, no preamble, no explanation."
             "Do not exceed the specified constraint."
         )},
         {"role": "user", "content": task_prompt},
