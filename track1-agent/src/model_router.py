@@ -16,21 +16,21 @@ logger = logging.getLogger(__name__)
 # case where the harness injects a different ALLOWED_MODELS list at runtime.
 _MODEL_TIERS: Dict[str, str] = {
     # MoE with small active params — fastest/cheapest per token
-    "gemma-4-26b-a4b-it":      "CHEAP",
+    "accounts/fireworks/models/gemma-4-26b-a4b-it":   "CHEAP",
     # Quantized 31b — near-CHEAP cost with more accuracy than the a4b variant
-    "gemma-4-31b-it-nvfp4":    "CHEAP",
+    "accounts/fireworks/models/gemma-4-31b-it-nvfp4": "CHEAP",
     # Full 31b — solid mid-tier general model
-    "gemma-4-31b-it":          "MID",
+    "accounts/fireworks/models/gemma-4-31b-it":        "MID",
     # Code-specialized model — used as a fixed override for code categories (see below)
-    "kimi-k2p7-code":          "MID",
+    "accounts/fireworks/models/kimi-k2p7-code":        "MID",
     # Strongest general reasoning — reserved for math and logic
-    "minimax-m3":              "LARGE",
+    "accounts/fireworks/models/minimax-m3":            "LARGE",
 }
 
 # Fixed routing override: always use this model for code categories,
 # regardless of tier, because it is explicitly code-specialized.
 # Validated at startup; falls back to MID tier if absent from ALLOWED_MODELS.
-_CODE_MODEL = "kimi-k2p7-code"
+_CODE_MODEL = "accounts/fireworks/models/kimi-k2p7-code"
 _CODE_CATEGORIES = {"code_debugging", "code_generation"}
 
 # Category → tier mapping.
@@ -95,7 +95,8 @@ def init_router(allowed_models: List[str]):
             _tiers[tier] = allowed_models[0]
 
     # Validate the code-specialist override
-    _code_model_available = _CODE_MODEL in _allowed_set
+    # Match by full ID or short suffix (handles both harness-injected and local .env formats)
+    _code_model_available = any(_CODE_MODEL == m or m.endswith("/" + _CODE_MODEL.split("/")[-1]) for m in _allowed_set)
     if not _code_model_available:
         logger.warning("%r not in ALLOWED_MODELS — code categories will fall back to MID tier", _CODE_MODEL)
     else:
@@ -104,13 +105,17 @@ def init_router(allowed_models: List[str]):
 
 def get_model_for_category(category: str) -> str:
     # Fixed override for code categories
-    if category in _CODE_CATEGORIES:
-        if _code_model_available:
-            logger.info("Category %r → code override → %s", category, _CODE_MODEL)
-            return _CODE_MODEL
-        # Fall through to tier-based routing if code model is absent
+    if category in _CODE_CATEGORIES and _code_model_available:
+        # Find the actual full ID in the allowed set (matches by suffix for flexibility)
+        code_model_id = next(
+            (m for m in _allowed_set if m == _CODE_MODEL or m.endswith("/" + _CODE_MODEL.split("/")[-1])),
+            None
+        )
+        if code_model_id:
+            logger.info("Category %r -> code override -> %s", category, code_model_id)
+            return code_model_id
 
     tier = CATEGORY_TIER.get(category, "MID")
     model = _tiers.get(tier, list(_tiers.values())[0])
-    logger.info("Category %r → tier %s → model %s", category, tier, model)
+    logger.info("Category %r -> tier %s -> model %s", category, tier, model)
     return model
