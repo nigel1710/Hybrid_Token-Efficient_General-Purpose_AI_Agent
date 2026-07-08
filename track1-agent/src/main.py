@@ -15,10 +15,7 @@ from src.model_router import init_router, get_model_for_category
 from src.fireworks_client import call_fireworks
 from src.validator import validate_and_finalize
 import src.token_tracker as token_tracker
-from src.prompts import (
-    factual, math_reasoning, sentiment, summarisation,
-    ner, code_debugging, logical_reasoning, code_generation,
-)
+from src.prompts import get_prompt_builder, extract_math_answer, extract_code
 
 logger = logging.getLogger(__name__)
 
@@ -38,25 +35,14 @@ MAX_PROMPT_CHARS = 12000  # ~3k tokens; truncate if longer
 
 
 def _build_messages(category: str, prompt: str) -> list:
-    builders = {
-        "factual_knowledge": factual.build_prompt,
-        "math_reasoning": math_reasoning.build_prompt,
-        "sentiment_classification": sentiment.build_prompt,
-        "summarisation": summarisation.build_prompt,
-        "ner": ner.build_prompt,
-        "code_debugging": code_debugging.build_prompt,
-        "logical_reasoning": logical_reasoning.build_prompt,
-        "code_generation": code_generation.build_prompt,
-    }
-    builder = builders.get(category, factual.build_prompt)
-    return builder(prompt)
+    return get_prompt_builder(category)(prompt)
 
 
 def _post_process(category: str, raw: str) -> str:
     if category == "math_reasoning":
-        return math_reasoning.extract_answer(raw)
+        return extract_math_answer(raw)
     if category == "code_generation":
-        return code_generation.extract_code(raw)
+        return extract_code(raw)
     return raw
 
 
