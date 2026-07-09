@@ -51,6 +51,7 @@ CATEGORY_TIER: Dict[str, str] = {
 _tiers: Dict[str, str] = {}
 _allowed_set: set = set()
 _code_model_available: bool = False
+_unavailable: set = set()  # models that failed warm-up for this run
 
 
 def _build_tiers(allowed_models: List[str]) -> Dict[str, str]:
@@ -103,15 +104,34 @@ def init_router(allowed_models: List[str]):
         logger.info("Code override model available: %s", _CODE_MODEL)
 
 
+def mark_model_unavailable(models: set):
+    """Called after warm-up to exclude models that failed to deploy."""
+    global _unavailable
+    _unavailable = models
+    for model in models:
+        # Remap any tier pointing to an unavailable model to the next available tier
+        for tier, assigned in list(_tiers.items()):
+            if assigned in _unavailable:
+                # Find the next tier up that is available
+                fallback = next(
+                    (m for m in _tiers.values() if m not in _unavailable),
+                    list(_tiers.values())[-1]  # last resort: use whatever is left
+                )
+                logger.warning(
+                    "Model %s unavailable (warm-up failed) — remapping tier %s to %s",
+                    assigned, tier, fallback
+                )
+                _tiers[tier] = fallback
+
+
 def get_model_for_category(category: str) -> str:
     # Fixed override for code categories
     if category in _CODE_CATEGORIES and _code_model_available:
-        # Find the actual full ID in the allowed set (matches by suffix for flexibility)
         code_model_id = next(
             (m for m in _allowed_set if m == _CODE_MODEL or m.endswith("/" + _CODE_MODEL.split("/")[-1])),
             None
         )
-        if code_model_id:
+        if code_model_id and code_model_id not in _unavailable:
             logger.info("Category %r -> code override -> %s", category, code_model_id)
             return code_model_id
 

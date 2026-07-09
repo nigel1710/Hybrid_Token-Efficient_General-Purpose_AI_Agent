@@ -71,20 +71,31 @@ Set `ALLOWED_MODELS` in your `.env` to the full comma-separated list:
 ALLOWED_MODELS=minimax-m3,kimi-k2p7-code,gemma-4-31b-it,gemma-4-26b-a4b-it,gemma-4-31b-it-nvfp4
 ```
 
-## Pre-Submission Validation Checklist
+## Pre-Submission Deployment Checklist
+
+**Gemma models are on-demand deployments on Fireworks — they scale to zero when idle.**
+Before every test run and before final submission:
+
+1. Go to https://app.fireworks.ai/models and confirm these models show as **Deployed** (not Scaled to Zero):
+   - `gemma-4-26b-a4b-it`
+   - `gemma-4-31b-it-nvfp4`
+   - `gemma-4-31b-it`
+2. If any show as scaled to zero, click Deploy and wait ~30–60s before running.
+3. Re-check close to submission time — do not assume a model that was deployed earlier in the day is still deployed.
+4. The warm-up step in `main.py` will attempt to spin them up automatically at container start, but a pre-deployed model is faster and more reliable.
 
 **Run the full local test batch against real Fireworks calls before final submission:**
 
 ```bash
 export LOCAL_DEV=true
 export TASKS_PATH=tests/sample_tasks/tasks_all_categories.json
-python src/main.py
+python -m src.main
 ```
 
 For each category in the output, verify the answer quality:
 - If `sentiment_classification` or `ner` underperform on `gemma-4-26b-a4b-it`, bump them to `MID`
 - If `factual_knowledge` or `summarisation` underperform on `gemma-4-31b-it`, bump to `LARGE`
-- If `math_reasoning` or `logical_reasoning` underperform on `minimax-m3`, there is no higher tier — consider adding chain-of-thought prompting instead
-- If code categories underperform on `kimi-k2p7-code`, check the prompt templates in `src/prompts/code_debugging.py` and `src/prompts/code_generation.py` first
+- If `math_reasoning` or `logical_reasoning` underperform on `minimax-m3`, consider adding chain-of-thought prompting
+- If code categories underperform on `kimi-k2p7-code`, check prompt templates in `src/prompts.py`
 
 Retune `_MODEL_TIERS` and `CATEGORY_TIER` in `model_router.py` based on those results, then rebuild and push the final image.
