@@ -10,6 +10,114 @@ _API_ERROR_PATTERNS = re.compile(
 )
 _NER_KEYS = {"person", "organization", "location", "date"}
 
+# Maximum allowed lengths (approx. 3x the expected clean answer length)
+_CATEGORY_MAX_LENGTHS = {
+    "sentiment_classification": 300,
+    "math_reasoning": 100,
+    "logical_reasoning": 200,
+    "factual_knowledge": 400,
+    "summarisation": 1200,
+    "ner": 1500,
+    "code_debugging": 3000,
+    "code_generation": 4000,
+}
+
+# Substrings indicating that internal reasoning monologue has leaked into the answer
+_REASONING_LEAK_PHRASES = [
+    "we need to",
+    "let's",
+    "let us",
+    "hmm",
+    "the user wants",
+    "i need to figure out",
+]
+
+
+def strip_reasoning_blocks(raw: str) -> str:
+    """
+    Scans the response for closing tags like </think>, </thought>, etc.
+    If present, it discards everything up to and including that closing tag,
+    keeping only what follows. Otherwise, strips any individual tags.
+    """
+    cleaned = raw.strip()
+    
+    # Check for closing tags and discard everything before/including them
+    closing_tags = [r"</think>", r"</thought>", r"</reason>", r"</reasoning>"]
+    for tag in closing_tags:
+        match = re.search(tag, cleaned, re.IGNORECASE)
+        if match:
+            # Keep only what follows the closing tag
+            cleaned = cleaned[match.end():].strip()
+            
+    # Strip any remaining standalone reasoning tags (like opening tags <think> or leftover unclosed tags)
+    cleaned = re.sub(r"<(?:think|thought|reason|reasoning)>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"</(?:think|thought|reason|reasoning)>", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
+def contains_reasoning_leak(text: str) -> bool:
+    """
+    Checks if the response contains typical thinking monologue phrases.
+    """
+    lowered = text.lower()
+    for phrase in _REASONING_LEAK_PHRASES:
+        if phrase in lowered:
+            return True
+    return False
+
+
+def extract_last_resort(raw: str, category: str) -> str:
+    """
+    Last-resort extraction: extracts just the final sentence or labeled portion
+    from a response that has leaked reasoning monologue.
+    """
+    if not raw or not raw.strip():
+        return raw
+        
+    text = strip_reasoning_blocks(raw)
+    
+    # 1. Category-specific extractions
+    if category == "sentiment_classification":
+        # Extract starting from the last occurrence of "Sentiment:"
+        idx = text.lower().rfind("sentiment:")
+        if idx != -1:
+            return text[idx:].strip()
+            
+    elif category == "math_reasoning":
+        # Extract starting from the last occurrence of "Answer:"
+        idx = text.lower().rfind("answer:")
+        if idx != -1:
+            return text[idx:].strip()
+        # Fallback to the last line containing a digit/number
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        for line in reversed(lines):
+            if re.search(r"\d", line):
+                return line
+                
+    elif category == "ner":
+        # Extract the last JSON-like block
+        match = re.findall(r"(\{[\s\S]*?\})", text)
+        if match:
+            return match[-1].strip()
+            
+    elif category in ("code_generation", "code_debugging"):
+        # Extract the last code block
+        match = re.findall(r"```(?:\w+)?\n([\s\S]*?)```", text)
+        if match:
+            return match[-1].strip()
+
+    # 2. General fallback: if multiple lines, try using the last line if it is short
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if len(lines) > 1 and len(lines[-1]) < 150:
+        return lines[-1]
+        
+    # Split into sentences and return the last sentence
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    if sentences:
+        return sentences[-1].strip()
+        
+    return text
+
 
 def _strip_code_fence(text: str) -> str:
     match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
@@ -65,11 +173,23 @@ def validate_and_finalize(
     if not raw_answer or not raw_answer.strip():
         return False, None, "Empty or None answer"
 
-    raw = raw_answer.strip()
+    # Step 1: Strip reasoning blocks (<think>...</think> etc.)
+    raw = strip_reasoning_blocks(raw_answer)
 
+    # Step 2: Check for standard API refusals
     if len(raw) < 50 and _API_ERROR_PATTERNS.search(raw):
         return False, None, "Response looks like an API refusal"
 
+    # Step 3: Check for reasoning leaks (phrases)
+    if contains_reasoning_leak(raw):
+        return False, None, "Reasoning leak: contains thinking trace monologue"
+
+    # Step 4: Check for length constraints
+    max_len = _CATEGORY_MAX_LENGTHS.get(category, 1000)
+    if len(raw) > max_len:
+        return False, None, f"Reasoning leak: answer exceeds expected length constraint for {category} ({len(raw)} > {max_len} chars)"
+
+    # Step 5: Category-specific validations
     if category == "ner":
         return _validate_ner(raw)
     if category == "sentiment_classification":

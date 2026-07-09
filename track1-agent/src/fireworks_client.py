@@ -49,6 +49,9 @@ async def call_fireworks(
         "Content-Type": "application/json",
     }
     payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
+    if "kimi-k2p7-code" in model.lower():
+        # Disable visible thinking for Kimi model by default to save tokens and avoid leaks
+        payload["reasoning_effort"] = "none"
 
     gemma = _is_gemma(model)
     timeout = GEMMA_TIMEOUT if gemma else DEFAULT_TIMEOUT

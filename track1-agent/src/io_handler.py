@@ -47,6 +47,7 @@ def read_tasks() -> List[Dict]:
         tid = item["task_id"]
         if tid in seen_ids:
             logger.warning("Duplicate task_id %r at index %d (first seen at %d)", tid, i, seen_ids[tid])
+            continue
         else:
             seen_ids[tid] = i
         if not item["prompt"] or not str(item["prompt"]).strip():
@@ -57,17 +58,38 @@ def read_tasks() -> List[Dict]:
 
 
 def write_results(results: List[Dict]):
-    output_dir = os.path.dirname(OUTPUT_PATH)
+    abs_path = os.path.abspath(OUTPUT_PATH)
+    output_dir = os.path.dirname(abs_path)
     os.makedirs(output_dir, exist_ok=True)
 
     output = [{"task_id": r["task_id"], "answer": r["answer"]} for r in results]
     json_str = json.dumps(output, ensure_ascii=False, indent=2)
 
-    # Self-check
+    # Self-check string validity before write
     json.loads(json_str)
 
-    tmp_path = OUTPUT_PATH + ".tmp"
+    tmp_path = abs_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(json_str)
-    os.replace(tmp_path, OUTPUT_PATH)
-    logger.info("Wrote %d results to %s", len(output), OUTPUT_PATH)
+    
+    # os.replace is correct cross-platform call for Windows and Linux
+    os.replace(tmp_path, abs_path)
+    
+    # Read-back verification
+    try:
+        with open(abs_path, "r", encoding="utf-8") as f:
+            read_back_data = json.load(f)
+        if not isinstance(read_back_data, list):
+            logger.error("Read-back verification FAILED: Content at %s is not a list", abs_path)
+        elif len(read_back_data) != len(output):
+            logger.error(
+                "Read-back verification FAILED: Code intended to write %d entries, "
+                "but on-disk file %s actually contains %d entries",
+                len(output), abs_path, len(read_back_data)
+            )
+        else:
+            logger.info("Read-back verification PASSED: Confirmed %d entries exist at %s", len(read_back_data), abs_path)
+    except Exception as e:
+        logger.error("Read-back verification FAILED to read from %s: %s", abs_path, e)
+
+    logger.info("Wrote %d results to %s", len(output), abs_path)

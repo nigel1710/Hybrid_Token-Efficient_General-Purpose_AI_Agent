@@ -14,7 +14,7 @@ from src.io_handler import read_tasks, write_results
 from src.classifier import classify_task
 from src.model_router import init_router, get_model_for_category, mark_model_unavailable
 from src.fireworks_client import call_fireworks, _is_gemma
-from src.validator import validate_and_finalize
+from src.validator import validate_and_finalize, extract_last_resort
 import src.token_tracker as token_tracker
 from src.prompts import get_prompt_builder, extract_math_answer, extract_code
 
@@ -102,15 +102,27 @@ async def _warmup_gemma_models(config, allowed_models: List[str]) -> Set[str]:
 
 async def _process_task(task: dict, config, deadline: float, semaphore: asyncio.Semaphore) -> dict:
     task_id = task["task_id"]
-    prompt = task["prompt"].strip() or "Please provide a clarification — the prompt was empty."
+    raw_prompt = task["prompt"].strip()
 
-    prompt = _truncate_prompt(prompt)
+    # Early exit for empty prompts — no API call, no tokens wasted
+    if not raw_prompt:
+        logger.warning(
+            "Task %r has an empty prompt — skipping API call and using placeholder answer",
+            task_id,
+        )
+        return {
+            "task_id": task_id,
+            "answer": "No answer available: the task prompt was empty.",
+        }
+
+    prompt = _truncate_prompt(raw_prompt)
     category = classify_task(prompt, task_id)
     model = get_model_for_category(category)
     max_tokens = MAX_TOKENS_BY_CATEGORY.get(category, 512)
 
     best_raw: Optional[str] = None
     retry_suffix = ""
+
 
     for attempt in range(3):
         if time.monotonic() >= deadline - 5:
@@ -141,10 +153,16 @@ async def _process_task(task: dict, config, deadline: float, semaphore: asyncio.
 
         best_raw = raw if raw else best_raw
         logger.warning("Task %r attempt %d invalid: %s", task_id, attempt, reason)
-        retry_suffix = f"\n\n[Your previous response was invalid: {reason}. Please correct it.]"
+        if reason and "reasoning leak" in reason.lower():
+            retry_suffix = "\n\n[Do not show your reasoning. Output only the final answer in the exact format specified.]"
+        else:
+            retry_suffix = f"\n\n[Your previous response was invalid: {reason}. Please correct it.]"
 
-    # All attempts done — use best available
-    fallback = best_raw or f"Unable to generate a confident answer for this task (task_id={task_id})."
+    # All attempts done — use best available with last-resort extraction if there was a reasoning leak
+    if best_raw:
+        fallback = extract_last_resort(best_raw, category)
+    else:
+        fallback = f"Unable to generate a confident answer for this task (task_id={task_id})."
     logger.warning("Task %r using fallback answer", task_id)
     return {"task_id": task_id, "answer": fallback}
 
