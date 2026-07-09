@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import sys
 import time
 import traceback
@@ -125,7 +126,7 @@ async def _process_task(task: dict, config, deadline: float, semaphore: asyncio.
             )
 
         if result.usage:
-            token_tracker.record(result.usage)
+            token_tracker.record(result.usage, task_id=task_id, category=category, model=model)
 
         if not result.success:
             logger.warning("Task %r attempt %d failed: %s", task_id, attempt, result.error)
@@ -189,6 +190,7 @@ async def _run(config, tasks: List[dict]) -> List[dict]:
 
     elapsed = time.monotonic() - start
     token_tracker.log_summary()
+    token_tracker.write_token_log(tasks_file=os.environ.get("TASKS_PATH", ""))
     logger.info("Completed %d tasks in %.1fs (excluding warm-up)", len(results_map), elapsed)
 
     return [results_map[t["task_id"]] for t in tasks]
