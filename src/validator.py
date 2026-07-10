@@ -10,27 +10,17 @@ _API_ERROR_PATTERNS = re.compile(
 )
 _NER_KEYS = {"person", "organization", "location", "date"}
 
-# Maximum allowed lengths (approx. 3x the expected clean answer length)
+# Generous limits — only catch truly runaway responses, not verbose-but-valid answers
 _CATEGORY_MAX_LENGTHS = {
-    "sentiment_classification": 300,
-    "math_reasoning": 100,
-    "logical_reasoning": 200,
-    "factual_knowledge": 400,
-    "summarisation": 1200,
-    "ner": 1500,
-    "code_debugging": 3000,
-    "code_generation": 4000,
+    "sentiment_classification": 600,
+    "math_reasoning": 400,
+    "logical_reasoning": 1500,
+    "factual_knowledge": 1200,
+    "summarisation": 2000,
+    "ner": 2000,
+    "code_debugging": 4000,
+    "code_generation": 5000,
 }
-
-# Substrings indicating that internal reasoning monologue has leaked into the answer
-_REASONING_LEAK_PHRASES = [
-    "we need to",
-    "let's",
-    "let us",
-    "hmm",
-    "the user wants",
-    "i need to figure out",
-]
 
 
 def strip_reasoning_blocks(raw: str) -> str:
@@ -53,17 +43,6 @@ def strip_reasoning_blocks(raw: str) -> str:
     cleaned = re.sub(r"<(?:think|thought|reason|reasoning)>", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"</(?:think|thought|reason|reasoning)>", "", cleaned, flags=re.IGNORECASE)
     return cleaned.strip()
-
-
-def contains_reasoning_leak(text: str) -> bool:
-    """
-    Checks if the response contains typical thinking monologue phrases.
-    """
-    lowered = text.lower()
-    for phrase in _REASONING_LEAK_PHRASES:
-        if phrase in lowered:
-            return True
-    return False
 
 
 def extract_last_resort(raw: str, category: str) -> str:
@@ -180,14 +159,10 @@ def validate_and_finalize(
     if len(raw) < 50 and _API_ERROR_PATTERNS.search(raw):
         return False, None, "Response looks like an API refusal"
 
-    # Step 3: Check for reasoning leaks (phrases)
-    if contains_reasoning_leak(raw):
-        return False, None, "Reasoning leak: contains thinking trace monologue"
-
-    # Step 4: Check for length constraints
-    max_len = _CATEGORY_MAX_LENGTHS.get(category, 1000)
+    # Step 3: Check for length constraints (phrase-based leak check removed — too many false positives)
+    max_len = _CATEGORY_MAX_LENGTHS.get(category, 2000)
     if len(raw) > max_len:
-        return False, None, f"Reasoning leak: answer exceeds expected length constraint for {category} ({len(raw)} > {max_len} chars)"
+        return False, None, f"Answer too long for {category} ({len(raw)} > {max_len} chars)"
 
     # Step 5: Category-specific validations
     if category == "ner":

@@ -123,12 +123,13 @@ async def _process_task(task: dict, config, deadline: float, semaphore: asyncio.
     best_raw: Optional[str] = None
     retry_suffix = ""
 
-
     for attempt in range(3):
         if time.monotonic() >= deadline - 5:
             logger.warning("Task %r: deadline too close, using best available answer", task_id)
             break
 
+        # Re-resolve model each attempt so warm-up failures mid-run are respected
+        model = get_model_for_category(category)
         messages = _build_messages(category, prompt + retry_suffix)
 
         async with semaphore:
@@ -141,7 +142,11 @@ async def _process_task(task: dict, config, deadline: float, semaphore: asyncio.
             token_tracker.record(result.usage, task_id=task_id, category=category, model=model)
 
         if not result.success:
-            logger.warning("Task %r attempt %d failed: %s", task_id, attempt, result.error)
+            logger.warning("Task %r attempt %d failed on %s: %s", task_id, attempt, model, result.error)
+            # If this model is dead (404 exhausted), mark it and re-route next attempt
+            if "404" in (result.error or ""):
+                mark_model_unavailable({model})
+                logger.warning("Marked %s unavailable — next attempt will use fallback model", model)
             retry_suffix = f"\n\n[Previous attempt failed: {result.error}. Please try again.]"
             continue
 
@@ -153,7 +158,7 @@ async def _process_task(task: dict, config, deadline: float, semaphore: asyncio.
 
         best_raw = raw if raw else best_raw
         logger.warning("Task %r attempt %d invalid: %s", task_id, attempt, reason)
-        if reason and "reasoning leak" in reason.lower():
+        if reason and "too long" in reason.lower():
             retry_suffix = "\n\n[Do not show your reasoning. Output only the final answer in the exact format specified.]"
         else:
             retry_suffix = f"\n\n[Your previous response was invalid: {reason}. Please correct it.]"

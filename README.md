@@ -71,6 +71,19 @@ Set `ALLOWED_MODELS` in your `.env` to the full comma-separated list:
 ALLOWED_MODELS=minimax-m3,kimi-k2p7-code,gemma-4-31b-it,gemma-4-26b-a4b-it,gemma-4-31b-it-nvfp4
 ```
 
+## Live Demo (Streamlit)
+
+An interactive demo UI for judges — runs the real pipeline with live per-task updates, charts, and a downloadable results file.
+
+```bash
+pip install -r demo/requirements.txt
+streamlit run demo/app.py
+```
+
+Open http://localhost:8501. Enter your API credentials in the config panel, upload or paste a `tasks.json`, and click **Run Agent**. See `demo/README.md` for full details.
+
+The demo imports directly from `src/` and is **not** part of the Docker submission image.
+
 ## Pre-Submission Deployment Checklist
 
 **Gemma models are on-demand deployments on Fireworks — they scale to zero when idle.**

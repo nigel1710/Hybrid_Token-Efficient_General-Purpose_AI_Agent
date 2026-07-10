@@ -105,23 +105,23 @@ def init_router(allowed_models: List[str]):
 
 
 def mark_model_unavailable(models: set):
-    """Called after warm-up to exclude models that failed to deploy."""
+    """Called after warm-up (or mid-run) to exclude models that failed to deploy."""
     global _unavailable
-    _unavailable = models
-    for model in models:
-        # Remap any tier pointing to an unavailable model to the next available tier
-        for tier, assigned in list(_tiers.items()):
-            if assigned in _unavailable:
-                # Find the next tier up that is available
-                fallback = next(
-                    (m for m in _tiers.values() if m not in _unavailable),
-                    list(_tiers.values())[-1]  # last resort: use whatever is left
-                )
-                logger.warning(
-                    "Model %s unavailable (warm-up failed) — remapping tier %s to %s",
-                    assigned, tier, fallback
-                )
-                _tiers[tier] = fallback
+    _unavailable |= models
+    # Remap every tier whose assigned model is now unavailable
+    all_models = list(_MODEL_TIERS.keys())
+    for tier, assigned in list(_tiers.items()):
+        if assigned in _unavailable:
+            # Pick the first known model not unavailable; last resort: keep current
+            fallback = next(
+                (m for m in all_models if m not in _unavailable and m in _allowed_set),
+                assigned,
+            )
+            logger.warning(
+                "Model %s unavailable — remapping tier %s to %s",
+                assigned, tier, fallback,
+            )
+            _tiers[tier] = fallback
 
 
 def get_model_for_category(category: str) -> str:
