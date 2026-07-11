@@ -10,28 +10,29 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Explicit tier assignment for each known model ID.
-# NOTE: The old approach used fuzzy size-hint parsing (e.g. "8b", "70b" substrings)
-# to auto-sort unknown model names into tiers. That heuristic is no longer needed
-# now that the real list is fixed — but the fallback logic below still handles the
-# case where the harness injects a different ALLOWED_MODELS list at runtime.
+# Model IDs must match the bare IDs supplied in ALLOWED_MODELS (no prefix).
 _MODEL_TIERS: Dict[str, str] = {
     # MoE with small active params — fastest/cheapest per token
-    "accounts/fireworks/models/gemma-4-26b-a4b-it":   "CHEAP",
+    "gemma-4-26b-a4b-it":   "CHEAP",
     # Quantized 31b — near-CHEAP cost with more accuracy than the a4b variant
-    "accounts/fireworks/models/gemma-4-31b-it-nvfp4": "CHEAP",
+    "gemma-4-31b-it-nvfp4": "CHEAP",
     # Full 31b — solid mid-tier general model
-    "accounts/fireworks/models/gemma-4-31b-it":        "MID",
+    "gemma-4-31b-it":        "MID",
     # Code-specialized model — used as a fixed override for code categories (see below)
-    "accounts/fireworks/models/kimi-k2p7-code":        "MID",
+    "kimi-k2p7-code":        "MID",
     # Strongest general reasoning — reserved for math and logic
-    "accounts/fireworks/models/minimax-m3":            "LARGE",
+    "minimax-m3":            "LARGE",
 }
 
 # Fixed routing override: always use this model for code categories,
 # regardless of tier, because it is explicitly code-specialized.
 # Validated at startup; falls back to MID tier if absent from ALLOWED_MODELS.
-_CODE_MODEL = "accounts/fireworks/models/kimi-k2p7-code"
+_CODE_MODEL = "kimi-k2p7-code"
 _CODE_CATEGORIES = {"code_debugging", "code_generation"}
+
+
+def _is_gemma(model: str) -> bool:
+    return "gemma" in model.lower()
 
 # Category → tier mapping.
 # code_debugging and code_generation are handled via _CODE_MODEL override above.
@@ -96,8 +97,7 @@ def init_router(allowed_models: List[str]):
             _tiers[tier] = allowed_models[0]
 
     # Validate the code-specialist override
-    # Match by full ID or short suffix (handles both harness-injected and local .env formats)
-    _code_model_available = any(_CODE_MODEL == m or m.endswith("/" + _CODE_MODEL.split("/")[-1]) for m in _allowed_set)
+    _code_model_available = _CODE_MODEL in _allowed_set
     if not _code_model_available:
         logger.warning("%r not in ALLOWED_MODELS — code categories will fall back to MID tier", _CODE_MODEL)
     else:
@@ -109,31 +109,33 @@ def mark_model_unavailable(models: set):
     global _unavailable
     _unavailable |= models
     # Remap every tier whose assigned model is now unavailable
-    all_models = list(_MODEL_TIERS.keys())
     for tier, assigned in list(_tiers.items()):
-        if assigned in _unavailable:
-            # Pick the first known model not unavailable; last resort: keep current
+        if assigned not in _unavailable:
+            continue
+
+        # If the failed model is a Gemma, prefer kimi-k2p7-code explicitly
+        kimi_available = _CODE_MODEL in _allowed_set and _CODE_MODEL not in _unavailable
+        if _is_gemma(assigned) and kimi_available:
+            fallback = _CODE_MODEL
+        else:
+            # Generic: first non-unavailable model from the allowed set
             fallback = next(
-                (m for m in all_models if m not in _unavailable and m in _allowed_set),
+                (m for m in _allowed_set if m not in _unavailable),
                 assigned,
             )
-            logger.warning(
-                "Model %s unavailable — remapping tier %s to %s",
-                assigned, tier, fallback,
-            )
-            _tiers[tier] = fallback
+        logger.warning(
+            "Model %s unavailable — remapping tier %s to %s",
+            assigned, tier, fallback,
+        )
+        _tiers[tier] = fallback
 
 
 def get_model_for_category(category: str) -> str:
     # Fixed override for code categories
     if category in _CODE_CATEGORIES and _code_model_available:
-        code_model_id = next(
-            (m for m in _allowed_set if m == _CODE_MODEL or m.endswith("/" + _CODE_MODEL.split("/")[-1])),
-            None
-        )
-        if code_model_id and code_model_id not in _unavailable:
-            logger.info("Category %r -> code override -> %s", category, code_model_id)
-            return code_model_id
+        if _CODE_MODEL not in _unavailable:
+            logger.info("Category %r -> code override -> %s", category, _CODE_MODEL)
+            return _CODE_MODEL
 
     tier = CATEGORY_TIER.get(category, "MID")
     model = _tiers.get(tier, list(_tiers.values())[0])
