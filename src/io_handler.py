@@ -6,8 +6,8 @@ from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
-TASKS_PATH = "input/tasks.json"
-OUTPUT_PATH = "output/results.json"
+TASKS_PATH = "/input/tasks.json"
+OUTPUT_PATH = "/output/results.json"
 
 
 def read_tasks() -> List[Dict]:
