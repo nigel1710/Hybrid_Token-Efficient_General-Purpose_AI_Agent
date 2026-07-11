@@ -14,7 +14,7 @@ from src.io_handler import read_tasks, write_results
 from src.classifier import classify_task
 from src.model_router import init_router, get_model_for_category, mark_model_unavailable
 from src.fireworks_client import call_fireworks, _is_gemma
-from src.validator import validate_and_finalize, extract_last_resort
+from src.validator import validate_and_finalize, extract_last_resort, strip_reasoning_blocks, check_min_completeness
 import src.token_tracker as token_tracker
 from src.prompts import get_prompt_builder, extract_math_answer, extract_code
 
@@ -32,6 +32,7 @@ MAX_TOKENS_BY_CATEGORY = {
     "ner": 512,
     "factual_knowledge": 512,
     "sentiment_classification": 256,
+    "compound": 1024,
 }
 MAX_PROMPT_CHARS = 12000  # ~3k tokens; truncate if longer
 
@@ -100,6 +101,54 @@ async def _warmup_gemma_models(config, allowed_models: List[str]) -> Set[str]:
     return failed
 
 
+async def _logical_reasoning_with_consistency(
+    task_id: str, prompt: str, config, model: str, max_tokens: int,
+    deadline: float, semaphore: asyncio.Semaphore,
+) -> Optional[str]:
+    """Two parallel calls; if they agree return immediately. If not, make a third tie-breaking call."""
+    messages = _build_messages("logical_reasoning", prompt)
+    tiebreak_messages = _build_messages(
+        "logical_reasoning",
+        prompt + "\n\n[Carefully re-check every constraint one at a time before giving your final answer.]",
+    )
+
+    async def _call(msgs: list) -> Optional[str]:
+        if time.monotonic() >= deadline - 5:
+            return None
+        async with semaphore:
+            r = await call_fireworks(config, model, msgs, category="logical_reasoning",
+                                     deadline=deadline, max_tokens=max_tokens)
+        if r.usage:
+            token_tracker.record(r.usage, task_id=task_id, category="logical_reasoning", model=model)
+        return r.content.strip() if r.success and r.content else None
+
+    a1, a2 = await asyncio.gather(_call(messages), _call(messages))
+    if a1 is None and a2 is None:
+        return None
+    if a1 is None:
+        return a2
+    if a2 is None:
+        return a1
+
+    c1 = strip_reasoning_blocks(a1).lower().strip()
+    c2 = strip_reasoning_blocks(a2).lower().strip()
+    if c1 == c2:
+        logger.info("Task %r logical_reasoning: both calls agree", task_id)
+        return a1
+
+    logger.warning("Task %r logical_reasoning: disagreement (%r vs %r) — tie-breaking",
+                   task_id, c1[:80], c2[:80])
+    a3 = await _call(tiebreak_messages)
+    if a3 is None:
+        return a1
+    c3 = strip_reasoning_blocks(a3).lower().strip()
+    if c3 == c1:
+        return a1
+    if c3 == c2:
+        return a2
+    return a3  # tie-breaker is its own answer — use it
+
+
 async def _process_task(task: dict, config, deadline: float, semaphore: asyncio.Semaphore) -> dict:
     task_id = task["task_id"]
     raw_prompt = task["prompt"].strip()
@@ -117,8 +166,19 @@ async def _process_task(task: dict, config, deadline: float, semaphore: asyncio.
 
     prompt = _truncate_prompt(raw_prompt)
     category = classify_task(prompt, task_id)
-    model = get_model_for_category(category)
     max_tokens = MAX_TOKENS_BY_CATEGORY.get(category, 512)
+
+    # logical_reasoning: self-consistency before standard retry loop
+    if category == "logical_reasoning":
+        model = get_model_for_category(category)
+        raw = await _logical_reasoning_with_consistency(
+            task_id, prompt, config, model, max_tokens, deadline, semaphore
+        )
+        if raw:
+            raw = _post_process(category, raw)
+            is_valid, cleaned, _ = validate_and_finalize(task_id, category, raw, 0)
+            return {"task_id": task_id, "answer": cleaned if is_valid else extract_last_resort(raw, category)}
+        # all consistency calls failed — fall through to standard loop
 
     best_raw: Optional[str] = None
     retry_suffix = ""
@@ -154,6 +214,11 @@ async def _process_task(task: dict, config, deadline: float, semaphore: asyncio.
         is_valid, cleaned, reason = validate_and_finalize(task_id, category, raw, attempt)
 
         if is_valid:
+            short_retry = check_min_completeness(category, cleaned, prompt)
+            if short_retry and attempt < 2:
+                retry_suffix = f"\n\n[{short_retry}]"
+                best_raw = cleaned
+                continue
             return {"task_id": task_id, "answer": cleaned}
 
         best_raw = raw if raw else best_raw

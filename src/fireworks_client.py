@@ -48,7 +48,9 @@ async def call_fireworks(
         "Authorization": f"Bearer {config.api_key}",
         "Content-Type": "application/json",
     }
-    payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
+    payload = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0, "top_p": 0.1}
+    logger.debug("Fireworks payload (category=%s model=%s): %s", category, model,
+                 {k: v for k, v in payload.items() if k != "messages"})
     if "kimi-k2p7-code" in model.lower():
         # Disable visible thinking for Kimi model by default to save tokens and avoid leaks
         payload["reasoning_effort"] = "none"

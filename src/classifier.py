@@ -97,8 +97,27 @@ _RULES = [
 ]
 
 
+_COMPOUND_PATTERN = re.compile(
+    r"(summar\w+|extract|classify|identify|list|explain|describe)"
+    r".{1,60}\band\b.{1,60}"
+    r"(summar\w+|extract|classify|identify|list|explain|describe)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def is_compound_task(prompt: str) -> bool:
+    """Returns True if the prompt contains two distinct category-trigger verbs joined by 'and'."""
+    return bool(_COMPOUND_PATTERN.search(prompt.strip()))
+
+
 def classify_task(prompt: str, task_id: str = "") -> str:
     text = prompt.strip()
+
+    # Compound prompts get their own category so main.py can build a combined prompt
+    if is_compound_task(text):
+        logger.info("Task %r classified as 'compound'", task_id)
+        return "compound"
+
     matched = []
     for category, fn in _RULES:
         if fn(text):
@@ -109,7 +128,8 @@ def classify_task(prompt: str, task_id: str = "") -> str:
     else:
         result = matched[0]
         if len(matched) > 1:
-            logger.warning("Task %r matches multiple categories %s — using %r (highest priority)", task_id, matched, result)
+            logger.warning("Task %r matches multiple categories %s — using %r (highest priority)",
+                           task_id, matched, result)
 
     logger.info("Task %r classified as %r", task_id, result)
     return result
