@@ -1,0 +1,10 @@
+[
+  {"task_id": "t01", "prompt": "What is the capital of France?"},
+  {"task_id": "t02", "prompt": "If a train travels 60 miles per hour for 2.5 hours, how many miles does it travel?"},
+  {"task_id": "t03", "prompt": "Classify the sentiment of this review: 'The product was absolutely fantastic, I loved every bit of it!'"},
+  {"task_id": "t04", "prompt": "Summarise the following text in one sentence: 'The Amazon rainforest, often referred to as the lungs of the Earth, produces 20% of the world's oxygen and is home to 10% of all species on the planet. Deforestation threatens this vital ecosystem.'"},
+  {"task_id": "t05", "prompt": "Extract all named entities from this text: 'Elon Musk founded SpaceX in 2002 in Hawthorne, California.'"},
+  {"task_id": "t06", "prompt": "The following code has a bug, fix it:\n```python\ndef add(a, b):\n    return a - b\n```\nThe function should add two numbers but returns the wrong result."},
+  {"task_id": "t07", "prompt": "A, B, and C each have a different pet. Exactly one of them has a dog. A does not have a cat. B has a fish. Who has the dog?"},
+  {"task_id": "t08", "prompt": "Write a function that takes a list of integers and returns the sum of all even numbers."}
+]
