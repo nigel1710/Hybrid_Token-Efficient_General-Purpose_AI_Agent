@@ -6,17 +6,17 @@ import time
 import traceback
 from typing import Dict, List, Optional, Set
 
-from src.logger_setup import setup_logging
+from logger_setup import setup_logging
 setup_logging()
 
-from src.config import load_config
-from src.io_handler import read_tasks, write_results
-from src.classifier import classify_task
-from src.model_router import init_router, get_model_for_category, mark_model_unavailable
-from src.fireworks_client import call_fireworks, _is_gemma
-from src.validator import validate_and_finalize, extract_last_resort, strip_reasoning_blocks, check_min_completeness
-import src.token_tracker as token_tracker
-from src.prompts import get_prompt_builder, extract_math_answer, extract_code
+from config import load_config
+from io_handler import read_tasks, write_results
+from classifier import classify_task
+from model_router import init_router, get_model_for_category, mark_model_unavailable
+from fireworks_client import call_fireworks, _is_gemma
+from validator import validate_and_finalize, extract_last_resort, strip_reasoning_blocks, check_min_completeness
+import token_tracker as token_tracker
+from prompts import get_prompt_builder, extract_math_answer, extract_code
 
 logger = logging.getLogger(__name__)
 
