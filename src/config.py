@@ -41,7 +41,7 @@ def load_config() -> Config:
 
     api_key = os.environ.get("FIREWORKS_API_KEY", "").strip()
     base_url = os.environ.get("FIREWORKS_BASE_URL", "").strip()
-    allowed_models_raw = os.environ.get("ALLOWED_MODELS", "").strip()
+    allowed_models_raw = os.environ.get("ALLOWED_MODELS", "")
 
     errors = []
     if not api_key:
@@ -53,7 +53,15 @@ def load_config() -> Config:
     if not allowed_models_raw:
         errors.append("ALLOWED_MODELS is missing or empty")
 
-    allowed_models = [m.strip() for m in allowed_models_raw.split(",") if m.strip()]
+    MODEL_PREFIX = "accounts/fireworks/models/"
+    allowed_models = []
+    for model in allowed_models_raw.split(","):
+        model = model.strip()
+        if not model:
+            continue
+        if not model.startswith(MODEL_PREFIX):
+            model = f"{MODEL_PREFIX}{model}"
+        allowed_models.append(model)
     if not errors and not allowed_models:
         errors.append("ALLOWED_MODELS contains no valid model IDs after parsing")
 
