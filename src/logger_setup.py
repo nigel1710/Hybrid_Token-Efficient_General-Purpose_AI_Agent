@@ -1,8 +1,11 @@
 import logging
+import os
 import sys
 
 
-def setup_logging(level: int = logging.INFO):
+def setup_logging(level: int = None):
+    if level is None:
+        level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     logging.basicConfig(stream=sys.stdout, level=level, format=fmt)
     # Route ERROR+ to stderr as well

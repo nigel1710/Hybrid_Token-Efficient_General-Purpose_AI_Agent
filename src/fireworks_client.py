@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+import re
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
@@ -47,6 +48,38 @@ class CallResult:
     usage: Optional[Dict[str, Any]] = None
 
 
+# Category-specific maximum token limits (tight but safe caps)
+CATEGORY_MAX_TOKENS = {
+    "factual_knowledge": 130,
+    "math_reasoning": 220,
+    "sentiment_classification": 80,
+    "summarisation": 110,
+    "ner": 150,
+    "code_debugging": 160,
+    "logical_reasoning": 220,
+    "code_generation": 160,
+}
+
+# Extra budget for factual questions that compare 2+ named concepts —
+# these need more room than simple single-fact questions, since they must
+# cover multiple distinct dimensions (e.g. volatility, speed, use case)
+# without being truncated mid-explanation.
+FACTUAL_COMPARISON_MAX_TOKENS = 260
+
+_COMPARISON_PATTERN = re.compile(
+    r"\bdifference between\b|\bcompare\b|\bcompared to\b|\bversus\b|\bvs\.?\b",
+    re.IGNORECASE,
+)
+
+# Category-appropriate stop sequences
+CATEGORY_STOP_SEQUENCES = {
+    "ner": ["}"],
+    "code_generation": ["\n```\n", "\n```\r\n"],
+    "code_debugging": ["\n```\n", "\n```\r\n"],
+    "math_reasoning": ["[END]"],
+}
+
+
 async def call_fireworks(
     config: Config,
     model: str,
@@ -56,9 +89,14 @@ async def call_fireworks(
     max_tokens: int = 1024,
 ) -> CallResult:
     extra_body: Dict[str, Any] = {}
-    if "kimi-k2p7-code" in model.lower():
+    if "kimi" in model.lower():
         # Disable visible thinking for Kimi model by default to save tokens and avoid leaks
         extra_body["reasoning_effort"] = "none"
+    elif "minimax" in model.lower():
+        if category == "logical_reasoning":
+            extra_body["thinking"] = {"type": "enabled"}
+        else:
+            extra_body["thinking"] = {"type": "disabled"}
 
     gemma = _is_gemma(model)
     timeout = GEMMA_TIMEOUT if gemma else DEFAULT_TIMEOUT
@@ -68,6 +106,47 @@ async def call_fireworks(
     client = _get_client(config, timeout)
 
     last_result = CallResult(success=False, error="No attempts made")
+
+    user_msg = ""
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            user_msg = msg.get("content", "")
+
+    # Override for summarisation tasks misclassified as math_reasoning or factual_knowledge
+    is_summary = False
+    if user_msg:
+        if bool(re.search(
+            r"\bsummar[iy]s[ei]\b|\bsummar[iy]z[ei]\b|\bcondense\b|\btl;?dr\b|\bshorten\b|"
+            r"in one sentence|in \w+ (bullet|sentence|word)|under \w+ word|bullet point",
+            user_msg, re.IGNORECASE
+        )):
+            is_summary = True
+
+    # Detect comparison-style factual questions (e.g. "difference between RAM and ROM")
+    # which need more completion budget than simple single-fact questions to avoid
+    # truncating mid-explanation or dropping a required comparison dimension.
+    is_comparison = (
+        category == "factual_knowledge"
+        and not is_summary
+        and bool(user_msg and _COMPARISON_PATTERN.search(user_msg))
+    )
+
+    if is_summary:
+        resolved_max_tokens = CATEGORY_MAX_TOKENS.get("summarisation", 110)
+        stop_seq = CATEGORY_STOP_SEQUENCES.get("summarisation")
+    elif is_comparison:
+        resolved_max_tokens = FACTUAL_COMPARISON_MAX_TOKENS
+        stop_seq = CATEGORY_STOP_SEQUENCES.get(category)
+    else:
+        resolved_max_tokens = CATEGORY_MAX_TOKENS.get(category, max_tokens)
+        stop_seq = CATEGORY_STOP_SEQUENCES.get(category)
+
+    if category == "logical_reasoning":
+        temperature = 0.2
+        top_p = 0.9
+    else:
+        temperature = 0
+        top_p = 0.1
 
     for attempt in range(max_retries + 1):
         if deadline is not None and time.monotonic() >= deadline - 2.0:
@@ -83,9 +162,12 @@ async def call_fireworks(
                 client.chat.completions.create,
                 model=model,
                 messages=messages,
-                max_tokens=max_tokens,
-                temperature=0,
-                top_p=0.1,
+                max_tokens=resolved_max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
+                stop=stop_seq,
                 extra_body=extra_body if extra_body else None,
             )
 
@@ -98,6 +180,13 @@ async def call_fireworks(
             content = response.choices[0].message.content
             if content is None:
                 content = ""
+
+            # Stop sequence reconstruction
+            if category == "ner" and content.strip() and not content.strip().endswith("}"):
+                content = content.strip() + "}"
+            elif category in ("code_generation", "code_debugging") and content.strip():
+                if "```" in content and content.count("```") % 2 != 0:
+                    content = content.rstrip() + "\n```"
 
             if not content.strip():
                 last_result = CallResult(success=False, error="Empty completion returned")

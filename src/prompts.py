@@ -6,12 +6,26 @@ from typing import Callable
 # Factual knowledge
 # ---------------------------------------------------------------------------
 
+def is_summary_task(text: str) -> bool:
+    return bool(re.search(
+        r"\bsummar[iy]s[ei]\b|\bsummar[iy]z[ei]\b|\bcondense\b|\btl;?dr\b|\bshorten\b|"
+        r"in one sentence|in \w+ (bullet|sentence|word)|under \w+ word|bullet point",
+        text, re.IGNORECASE
+    ))
+
+
 def build_factual_prompt(task_prompt: str) -> list:
+    if is_summary_task(task_prompt):
+        return build_summarisation_prompt(task_prompt)
     return [
         {"role": "system", "content": (
             "Answer the question directly and concisely. Do not repeat the question. No preamble. "
             "Answer only what is asked. Do not add supplementary facts, examples, or trivia "
-            "beyond what directly answers the question, even if related."
+            "beyond what directly answers the question, even if related. "
+            "When asked to compare two things, identify every distinct dimension the question implies "
+            "(e.g., speed, cost, volatility, use case, mechanism) and address each one explicitly and by name "
+            "in your answer. Completeness of coverage across all implied dimensions takes priority over "
+            "brevity — never drop a comparison axis to save space, but do not add unrequested extra dimensions either."
         )},
         {"role": "user", "content": task_prompt},
     ]
@@ -22,20 +36,24 @@ def build_factual_prompt(task_prompt: str) -> list:
 # ---------------------------------------------------------------------------
 
 def build_math_reasoning_prompt(task_prompt: str) -> list:
+    if is_summary_task(task_prompt):
+        return build_summarisation_prompt(task_prompt)
     return [
         {"role": "system", "content": (
-            "Solve the problem. You may reason internally, but output ONLY the final answer "
-            "clearly on the last line, prefixed with 'Answer: '."
+            "Solve the problem step by step. For multi-step problems, compute each intermediate "
+            "value explicitly and briefly before moving to the next step — do not skip steps. "
+            "After your working, output the final answer on its own line, prefixed with 'Answer: ' "
+            "and ended with ' [END]'."
         )},
         {"role": "user", "content": task_prompt},
     ]
 
-
 def extract_math_answer(raw: str) -> str:
-    match = re.search(r"Answer:\s*(.+)", raw, re.IGNORECASE)
+    cleaned = re.sub(r"\[end\]", "", raw, flags=re.IGNORECASE).strip()
+    match = re.search(r"Answer:\s*(.+)", cleaned, re.IGNORECASE)
     if match:
         return match.group(1).strip()
-    return raw.strip()
+    return cleaned.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +63,8 @@ def extract_math_answer(raw: str) -> str:
 def build_sentiment_prompt(task_prompt: str) -> list:
     return [
         {"role": "system", "content": (
-            "Classify the sentiment of the text as exactly one of: positive, negative, neutral. "
+            "Classify the sentiment of the text as exactly one of: positive, negative, neutral, mixed. "
+            "Use 'mixed' specifically for cases with clearly both positive and negative elements. "
             "Then give a one-sentence justification. "
             "Format: 'Sentiment: <label>. Justification: <reason>'"
         )},
@@ -60,8 +79,12 @@ def build_sentiment_prompt(task_prompt: str) -> list:
 def build_summarisation_prompt(task_prompt: str) -> list:
     return [
         {"role": "system", "content": (
-            "Summarise the following text according to the exact length/format instruction given. Output ONLY the summary, no reasoning, no preamble, no explanation."
-            "Do not exceed the specified constraint."
+            "Summarise the following text according to the exact length/format instruction given. Output ONLY the summary, no reasoning, no preamble, no explanation. "
+            "Do not exceed the specified constraint. "
+            "The source text covers multiple distinct points or paragraphs — your summary must represent "
+            "each major point from across the ENTIRE source text, not just the opening or one section. "
+            "Do not concentrate all constrained points (e.g. bullets) on a single theme from the source. "
+            "Each bullet point must appear on its own separate line, with a newline character between bullets — never join multiple bullets into one line."
         )},
         {"role": "user", "content": task_prompt},
     ]
@@ -80,6 +103,8 @@ def build_ner_prompt(task_prompt: str) -> list:
             "IMPORTANT type rules: "
             "Countries, nations, and nationalities (e.g. 'the United States', 'France', 'Japan') are LOCATION, not ORGANIZATION. "
             "Only actual institutions, companies, and formal bodies (e.g. 'Microsoft', 'the United Nations', 'Congress') are ORGANIZATION. "
+            "Company and institution names (e.g. 'ETH Zurich', 'Google') are ORGANIZATION even if the name contains a place name. "
+            "Cities, countries, and regions used as locations in the text are LOCATION, not ORGANIZATION, even when a person or org is associated with that place. "
             "Example: 'Apple was founded in the United States' → "
             '{"person": [], "organization": ["Apple"], "location": ["United States"], "date": []}.'
         )},

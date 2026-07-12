@@ -24,14 +24,14 @@ DEADLINE_SECONDS = 9.5 * 60       # task-processing budget (starts AFTER warm-up
 WARMUP_BUDGET_SECONDS = 45.0      # max time to spend warming up Gemma models
 CONCURRENCY_LIMIT = 8
 MAX_TOKENS_BY_CATEGORY = {
-    "logical_reasoning": 2048,
-    "math_reasoning": 1024,
-    "code_generation": 1024,
-    "code_debugging": 1024,
-    "summarisation": 512,
-    "ner": 512,
-    "factual_knowledge": 512,
-    "sentiment_classification": 256,
+    "logical_reasoning": 220,
+    "math_reasoning": 70,
+    "code_generation": 160,
+    "code_debugging": 160,
+    "summarisation": 110,
+    "ner": 150,
+    "factual_knowledge": 130,
+    "sentiment_classification": 80,
     "compound": 1024,
 }
 MAX_PROMPT_CHARS = 12000  # ~3k tokens; truncate if longer
@@ -176,7 +176,7 @@ async def _process_task(task: dict, config, deadline: float, semaphore: asyncio.
         )
         if raw:
             raw = _post_process(category, raw)
-            is_valid, cleaned, _ = validate_and_finalize(task_id, category, raw, 0)
+            is_valid, cleaned, _ = validate_and_finalize(task_id, category, raw, 0, prompt=prompt)
             return {"task_id": task_id, "answer": cleaned if is_valid else extract_last_resort(raw, category)}
         # all consistency calls failed — fall through to standard loop
 
@@ -211,7 +211,7 @@ async def _process_task(task: dict, config, deadline: float, semaphore: asyncio.
             continue
 
         raw = _post_process(category, result.content)
-        is_valid, cleaned, reason = validate_and_finalize(task_id, category, raw, attempt)
+        is_valid, cleaned, reason = validate_and_finalize(task_id, category, raw, attempt, prompt=prompt)
 
         if is_valid:
             short_retry = check_min_completeness(category, cleaned, prompt)
